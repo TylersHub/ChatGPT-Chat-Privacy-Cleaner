@@ -1,0 +1,10 @@
+node_modules/
+dist/
+automation-profile/
+output/
+data/
+config.json
+.env
+*.log
+.DS_Store
+

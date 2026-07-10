@@ -1,0 +1,11 @@
+{
+  "baseUrl": "https://chatgpt.com/",
+  "browserExecutablePath": null,
+  "port": 4317,
+  "maxKeywords": 50,
+  "maxBodyCharacters": 120000,
+  "searchPauseMs": 900,
+  "navigationPauseMs": 900,
+  "openaiModel": "gpt-5.4-mini"
+}
+
