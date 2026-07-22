@@ -1,5 +1,5 @@
 import { ArrowRight, CheckCircle2, ExternalLink, Pin, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 function pinLabel(state) {
   if (state === 'pinned') return 'Pinned — protected';
@@ -8,11 +8,9 @@ function pinLabel(state) {
 }
 
 export function ReviewStep({ state, act, onNavigate }) {
-  const [selected, setSelected] = useState(state.approvedIds);
+  const [selected, setSelected] = useState(() => [...state.approvedIds]);
   const [busy, setBusy] = useState(false);
   const selectable = useMemo(() => state.candidates.filter((item) => item.pinState === 'unpinned'), [state.candidates]);
-
-  useEffect(() => setSelected(state.approvedIds), [state.approvedIds]);
 
   function toggle(id) {
     setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);

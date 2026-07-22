@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { conversationIdFromUrl, findChromeExecutable, loginBrowserArguments } from '../server/chatgpt.mjs';
+import {
+  automatedBrowserLaunchOptions,
+  canonicalConversationUrl,
+  conversationIdFromUrl,
+  findChromeExecutable,
+  isBrowserClosedError,
+  loginBrowserArguments,
+  searchResultTitleFromText
+} from '../server/chatgpt.mjs';
 
 test('conversation IDs are accepted only from exact ChatGPT conversation paths', () => {
   assert.equal(conversationIdFromUrl('https://chatgpt.com/c/abc-123'), 'abc-123');
@@ -21,3 +29,24 @@ test('an explicit browser executable path is honored', async () => {
   assert.equal(await findChromeExecutable({ browserExecutablePath: process.execPath }), process.execPath);
 });
 
+test('conversation search parameters are removed before navigation', () => {
+  assert.equal(
+    canonicalConversationUrl('https://chatgpt.com/c/abc-123?src=history_search&messageId=message'),
+    'https://chatgpt.com/c/abc-123'
+  );
+});
+
+test('search result titles exclude snippets and dates', () => {
+  assert.equal(searchResultTitleFromText('Private chat title\nMatching message snippet\nYesterday'), 'Private chat title');
+});
+
+test('automated Chrome launches with its sandbox enabled', () => {
+  const options = automatedBrowserLaunchOptions(process.execPath);
+  assert.equal(options.chromiumSandbox, true);
+  assert.equal(options.args.includes('--no-sandbox'), false);
+});
+
+test('closed browser errors are recognized for one-time scan recovery', () => {
+  assert.equal(isBrowserClosedError(new Error('page.goto: Target page, context or browser has been closed')), true);
+  assert.equal(isBrowserClosedError(new Error('Conversation messages did not load')), false);
+});
