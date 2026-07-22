@@ -14,6 +14,7 @@ export class AppState {
       connected: false,
       loginOpened: false,
       job: null,
+      resumableJob: null,
       keywords,
       candidates: [],
       approvedIds: [],
@@ -83,4 +84,3 @@ export class AppState {
     return true;
   }
 }
-

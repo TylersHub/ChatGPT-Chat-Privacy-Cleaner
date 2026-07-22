@@ -15,7 +15,10 @@ export async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+export async function removeFile(filePath) {
+  await fs.rm(filePath, { force: true });
+}
+
 export function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
-

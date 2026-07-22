@@ -7,6 +7,7 @@ export function DeleteStep({ state, act, onNavigate }) {
   const [busy, setBusy] = useState(false);
   const selected = state.candidates.filter((item) => state.approvedIds.includes(item.id));
   const deleting = state.job === 'delete';
+  const resumable = state.resumableJob === 'delete';
   const exactConfirmation = `DELETE ${selected.length}`;
 
   async function startDelete() {
@@ -28,7 +29,7 @@ export function DeleteStep({ state, act, onNavigate }) {
   return (
     <section className="screen screen--delete">
       <div className="screen-heading">
-        <h1>{deleting ? 'Deleting approved chats' : state.deletionResults.length ? 'Deletion run complete' : 'Final confirmation'}</h1>
+        <h1>{deleting ? 'Deleting approved chats' : resumable ? 'Resume saved deletion' : state.deletionResults.length ? 'Deletion run complete' : 'Final confirmation'}</h1>
         <p>{deleting ? 'Keep this window open. ClearSlate rechecks each chat before deleting it.' : 'Deletion is permanent and cannot be undone through the ChatGPT interface.'}</p>
       </div>
 
@@ -57,7 +58,7 @@ export function DeleteStep({ state, act, onNavigate }) {
             ))}
           </div>
         </div>
-      ) : state.deletionResults.length ? (
+      ) : state.deletionResults.length && !resumable ? (
         <div className="results-summary">
           <div className="result-stat result-stat--success"><strong>{state.deletionResults.filter((item) => item.status === 'deleted').length}</strong><span>Deleted</span></div>
           <div className="result-stat"><strong>{state.deletionResults.filter((item) => item.status === 'skipped').length}</strong><span>Protected</span></div>

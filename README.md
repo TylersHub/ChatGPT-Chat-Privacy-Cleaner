@@ -82,6 +82,8 @@ For AI suggestions, describe the kinds of chats you are concerned about and ente
 
 Click **Start scan**. A Chrome window opens while ClearSlate uses ChatGPT's normal history search, opens matching chats, checks visible text locally, and inspects each conversation menu for pin state.
 
+ClearSlate spaces browser actions by 5-10 seconds and takes a longer cooldown after each batch. If ChatGPT displays a request-limit warning, it saves a checkpoint, waits with progressively longer backoff, and resumes automatically. Cancelling or closing ClearSlate keeps the checkpoint; starting the same scan or deletion again resumes it. **Reset session** clears saved checkpoints.
+
 The progress bar covers both keyword searching and match inspection. Scanning never deletes chats. You can request cancellation at any time.
 
 ### 4. Review

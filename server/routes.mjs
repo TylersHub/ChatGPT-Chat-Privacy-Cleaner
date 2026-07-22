@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Router } from 'express';
 import { deleteApprovedChats, launchLoginBrowser, scanChatHistory, verifyConnection } from './chatgpt.mjs';
 import { generateKeywords } from './openai-keywords.mjs';
-import { timestamp, writeJson } from './storage.mjs';
+import { readJson, removeFile, timestamp, writeJson } from './storage.mjs';
 import { sanitizeApprovedIds, sanitizeKeywords } from './validation.mjs';
 
 function asyncRoute(handler) {
@@ -11,6 +11,8 @@ function asyncRoute(handler) {
 
 export function createApiRouter({ state, config }) {
   const router = Router();
+  const scanCheckpointPath = path.join(config.dataDir, 'scan-checkpoint.json');
+  const deleteCheckpointPath = path.join(config.dataDir, 'delete-checkpoint.json');
 
   router.get('/state', (_request, response) => {
     response.json(state.snapshot());
@@ -39,8 +41,9 @@ export function createApiRouter({ state, config }) {
     if (state.value.job) throw new Error('Keywords cannot change while a task is running.');
     const keywords = sanitizeKeywords(request.body?.keywords, config.maxKeywords);
     if (!keywords.length) throw new Error('Add at least one keyword.');
-    state.patch({ keywords, candidates: [], approvedIds: [], deletionResults: [], error: null, notice: 'Keywords saved locally.' });
+    state.patch({ keywords, candidates: [], approvedIds: [], deletionResults: [], resumableJob: null, error: null, notice: 'Keywords saved locally.' });
     await writeJson(path.join(config.dataDir, 'preferences.json'), { keywords });
+    await removeFile(scanCheckpointPath);
     response.json({ ok: true, keywords });
   }));
 
@@ -56,15 +59,25 @@ export function createApiRouter({ state, config }) {
   router.post('/scan/start', asyncRoute(async (_request, response) => {
     if (!state.value.connected) throw new Error('Verify your ChatGPT connection first.');
     if (!state.value.keywords.length) throw new Error('Save at least one keyword first.');
+    const initialCheckpoint = await readJson(scanCheckpointPath, null);
+    const checkpointMatches = initialCheckpoint?.type === 'scan'
+      && JSON.stringify(initialCheckpoint.values) === JSON.stringify(state.value.keywords);
     const signal = state.startJob('scan');
-    state.patch({ candidates: [], approvedIds: [], deletionResults: [] });
+    state.patch({
+      candidates: checkpointMatches ? initialCheckpoint.candidates ?? [] : [],
+      approvedIds: [],
+      deletionResults: [],
+      resumableJob: 'scan'
+    });
     response.status(202).json({ ok: true });
 
     void (async () => {
       try {
-        const liveCandidates = [];
+        const liveCandidates = checkpointMatches ? [...(initialCheckpoint.candidates ?? [])] : [];
         const candidates = await scanChatHistory(config, state.value.keywords, {
           signal,
+          initialCheckpoint,
+          onCheckpoint: (checkpoint) => writeJson(scanCheckpointPath, checkpoint),
           onProgress: (progress) => state.setProgress(progress),
           onActivity: (message, tone) => state.addActivity(message, tone),
           onCandidate: (candidate) => {
@@ -81,7 +94,8 @@ export function createApiRouter({ state, config }) {
         };
         await writeJson(path.join(config.outputDir, 'candidates-latest.json'), report);
         await writeJson(path.join(config.outputDir, `candidates-${timestamp()}.json`), report);
-        state.patch({ candidates });
+        state.patch({ candidates, resumableJob: null });
+        await removeFile(scanCheckpointPath);
         state.finishJob(`Scan complete. ${candidates.length} matching chat${candidates.length === 1 ? '' : 's'} ready to review.`);
       } catch (error) {
         if (error.name === 'AbortError') {
@@ -99,7 +113,8 @@ export function createApiRouter({ state, config }) {
   router.post('/review', asyncRoute(async (request, response) => {
     if (state.value.job) throw new Error('Wait for the current task to finish.');
     const approvedIds = sanitizeApprovedIds(request.body?.approvedIds, state.value.candidates);
-    state.patch({ approvedIds, error: null, notice: `${approvedIds.length} chat${approvedIds.length === 1 ? '' : 's'} selected.` });
+    state.patch({ approvedIds, deletionResults: [], resumableJob: null, error: null, notice: `${approvedIds.length} chat${approvedIds.length === 1 ? '' : 's'} selected.` });
+    await removeFile(deleteCheckpointPath);
     await writeJson(path.join(config.outputDir, 'approved-latest.json'), {
       generatedAt: new Date().toISOString(),
       approved: state.value.candidates.filter((candidate) => approvedIds.includes(candidate.id))
@@ -114,14 +129,20 @@ export function createApiRouter({ state, config }) {
     if (request.body?.confirmation !== `DELETE ${selected.length}`) {
       throw new Error(`Type DELETE ${selected.length} exactly to continue.`);
     }
+    const initialCheckpoint = await readJson(deleteCheckpointPath, null);
+    const selectedIds = selected.map((candidate) => candidate.id);
+    const checkpointMatches = initialCheckpoint?.type === 'delete'
+      && JSON.stringify(initialCheckpoint.values) === JSON.stringify(selectedIds);
     const signal = state.startJob('delete');
-    state.patch({ deletionResults: [] });
+    state.patch({ deletionResults: checkpointMatches ? initialCheckpoint.results ?? [] : [], resumableJob: 'delete' });
     response.status(202).json({ ok: true });
 
     void (async () => {
       try {
         const results = await deleteApprovedChats(config, selected, {
           signal,
+          initialCheckpoint,
+          onCheckpoint: (checkpoint) => writeJson(deleteCheckpointPath, checkpoint),
           onProgress: (progress) => state.setProgress(progress),
           onActivity: (message, tone) => state.addActivity(message, tone)
         });
@@ -135,7 +156,8 @@ export function createApiRouter({ state, config }) {
           }
         };
         await writeJson(path.join(config.outputDir, `deletion-results-${timestamp()}.json`), report);
-        state.patch({ deletionResults: results });
+        state.patch({ deletionResults: results, resumableJob: null });
+        await removeFile(deleteCheckpointPath);
         state.finishJob(`Deletion run complete. ${report.summary.deleted} deleted, ${report.summary.skipped} protected, ${report.summary.errors} errors.`);
       } catch (error) {
         if (error.name === 'AbortError') {
@@ -146,18 +168,20 @@ export function createApiRouter({ state, config }) {
     })();
   }));
 
-  router.post('/session/reset', (_request, response) => {
+  router.post('/session/reset', asyncRoute(async (_request, response) => {
     if (state.value.job) return response.status(409).json({ error: 'Wait for the current task to finish.' });
     state.patch({
       candidates: [],
       approvedIds: [],
       deletionResults: [],
+      resumableJob: null,
       error: null,
       notice: 'Current review cleared. Your keywords and login remain.'
     });
     state.setProgress({ stage: 'idle', current: 0, total: 0, percent: 0, label: '', activity: [] });
+    await Promise.all([removeFile(scanCheckpointPath), removeFile(deleteCheckpointPath)]);
     response.json({ ok: true });
-  });
+  }));
 
   return router;
 }

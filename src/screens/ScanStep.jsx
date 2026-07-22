@@ -5,6 +5,7 @@ import { ProgressBar } from '../components/ProgressBar.jsx';
 export function ScanStep({ state, act, onNavigate }) {
   const [busy, setBusy] = useState(false);
   const scanning = state.job === 'scan';
+  const resumable = state.resumableJob === 'scan';
   const hasResults = state.candidates.length > 0 && !scanning;
   const counts = useMemo(() => ({
     unpinned: state.candidates.filter((item) => item.pinState === 'unpinned').length,
@@ -52,8 +53,8 @@ export function ScanStep({ state, act, onNavigate }) {
   return (
     <section className="screen screen--scan">
       <div className="screen-heading">
-        <h1>{scanning ? 'Finding matching chats' : 'Scan complete'}</h1>
-        <p>{scanning ? 'Keep this window open while ClearSlate searches your ChatGPT history.' : 'Review the matches and decide what should stay.'}</p>
+        <h1>{scanning ? 'Finding matching chats' : resumable ? 'Saved scan ready' : 'Scan complete'}</h1>
+        <p>{scanning ? 'Keep this window open while ClearSlate searches your ChatGPT history.' : resumable ? 'Continue from the last saved checkpoint when you are ready.' : 'Review the matches and decide what should stay.'}</p>
       </div>
 
       <div className="progress-section">
@@ -94,9 +95,12 @@ export function ScanStep({ state, act, onNavigate }) {
 
       <div className="next-step-row">
         <div><h2>What happens next</h2><p>You’ll review every match before anything can be deleted.</p></div>
-        <button className="button button--secondary" type="button" disabled={scanning} onClick={() => onNavigate('review')}>Review matches <ArrowRight size={18} /></button>
+        {resumable ? (
+          <button className="button button--primary" type="button" disabled={busy || !state.connected} onClick={startScan}><Search size={18} /> {busy ? 'Resuming...' : 'Resume scan'}</button>
+        ) : (
+          <button className="button button--secondary" type="button" disabled={scanning} onClick={() => onNavigate('review')}>Review matches <ArrowRight size={18} /></button>
+        )}
       </div>
     </section>
   );
 }
-

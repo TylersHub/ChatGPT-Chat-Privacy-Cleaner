@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
+import { RequestPacer } from './request-pacer.mjs';
 
 const CHAT_PATH_RE = /^\/c\/([a-zA-Z0-9-]+)\/?$/;
 
@@ -473,9 +474,38 @@ async function deleteConversation(page, candidate) {
   return conversationIdFromUrl(page.url()) !== candidate.id;
 }
 
-export async function scanChatHistory(config, keywords, { onProgress, onActivity, onCandidate, signal } = {}) {
+function matchingCheckpoint(checkpoint, type, values) {
+  return checkpoint?.type === type && JSON.stringify(checkpoint.values) === JSON.stringify(values);
+}
+
+function rateLimitFailure(error) {
+  return /rate limit|too many requests|requests too quickly/i.test(error?.message ?? '');
+}
+
+export async function scanChatHistory(config, keywords, {
+  initialCheckpoint, onCheckpoint, onProgress, onActivity, onCandidate, signal
+} = {}) {
   let session = await launchAutomatedBrowser(config);
-  const discovered = new Map();
+  const resumed = matchingCheckpoint(initialCheckpoint, 'scan', keywords);
+  const checkpoint = resumed ? initialCheckpoint : {
+    version: 1,
+    type: 'scan',
+    values: keywords,
+    phase: 'searching',
+    searchIndex: 0,
+    inspectIndex: 0,
+    discovered: [],
+    candidates: []
+  };
+  const discovered = new Map(checkpoint.discovered.map((item) => [item.id, item]));
+  const candidates = [...checkpoint.candidates];
+  const pacer = new RequestPacer(config, {
+    signal,
+    onProgress,
+    onActivity,
+    onCheckpoint: () => onCheckpoint?.(checkpoint)
+  });
+  if (resumed) onActivity?.('Resuming the saved scan checkpoint.', 'success');
 
   async function restartBrowser() {
     await session?.context.close().catch(() => {});
@@ -498,7 +528,7 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
   }
 
   try {
-    for (let index = 0; index < keywords.length; index += 1) {
+    for (let index = checkpoint.searchIndex; index < keywords.length; index += 1) {
       throwIfAborted(signal);
       const query = keywords[index];
       onProgress?.({
@@ -509,7 +539,10 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
         label: `Searching for “${query}”`
       });
       try {
-        const results = await withBrowserRecovery((page) => searchConversationLinks(page, query, config.searchPauseMs));
+        const results = await pacer.run(
+          () => session.page,
+          () => withBrowserRecovery((page) => searchConversationLinks(page, query, config.searchPauseMs))
+        );
         for (const result of results) {
           const current = discovered.get(result.id) ?? { ...result, searchHits: [] };
           current.searchHits = [...new Set([...current.searchHits, query])];
@@ -518,13 +551,18 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
         }
         onActivity?.(`${query} — ${results.length} chat${results.length === 1 ? '' : 's'} found`, 'success');
       } catch (error) {
+        if (rateLimitFailure(error)) throw error;
         onActivity?.(`${query} — skipped: ${error.message}`, 'warning');
       }
+      checkpoint.searchIndex = index + 1;
+      checkpoint.discovered = [...discovered.values()];
+      await onCheckpoint?.(checkpoint);
     }
 
     const items = [...discovered.values()];
-    const candidates = [];
-    for (let index = 0; index < items.length; index += 1) {
+    checkpoint.phase = 'inspecting';
+    await onCheckpoint?.(checkpoint);
+    for (let index = checkpoint.inspectIndex; index < items.length; index += 1) {
       throwIfAborted(signal);
       const item = items[index];
       onProgress?.({
@@ -535,10 +573,13 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
         label: `Checking ${item.title || 'matching chat'}`
       });
       try {
-        const snapshot = await withBrowserRecovery(async (page) => {
-          await openConversation(page, item.url, config.navigationPauseMs);
-          return getConversationSnapshot(page, config.maxBodyCharacters, item.title);
-        });
+        const snapshot = await pacer.run(
+          () => session.page,
+          () => withBrowserRecovery(async (page) => {
+            await openConversation(page, item.url, config.navigationPauseMs);
+            return getConversationSnapshot(page, config.maxBodyCharacters, item.title);
+          })
+        );
         const haystack = `${snapshot.title}\n${snapshot.body}`.toLocaleLowerCase();
         const textMatches = keywords.filter((keyword) => haystack.includes(keyword.toLocaleLowerCase()));
         const pin = await withBrowserRecovery(async (page) => {
@@ -563,8 +604,12 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
         candidates.push(candidate);
         onCandidate?.(candidate);
       } catch (error) {
+        if (rateLimitFailure(error)) throw error;
         onActivity?.(`${item.title || item.id} — ${error.message}`, 'warning');
       }
+      checkpoint.inspectIndex = index + 1;
+      checkpoint.candidates = candidates;
+      await onCheckpoint?.(checkpoint);
     }
 
     const pinOrder = { unpinned: 0, unknown: 1, pinned: 2 };
@@ -576,11 +621,30 @@ export async function scanChatHistory(config, keywords, { onProgress, onActivity
   }
 }
 
-export async function deleteApprovedChats(config, candidates, { onProgress, onActivity, signal } = {}) {
+export async function deleteApprovedChats(config, candidates, {
+  initialCheckpoint, onCheckpoint, onProgress, onActivity, signal
+} = {}) {
   const { context, page } = await launchAutomatedBrowser(config);
-  const results = [];
+  const candidateIds = candidates.map((candidate) => candidate.id);
+  const resumed = matchingCheckpoint(initialCheckpoint, 'delete', candidateIds);
+  const checkpoint = resumed ? initialCheckpoint : {
+    version: 1,
+    type: 'delete',
+    values: candidateIds,
+    nextIndex: 0,
+    candidates,
+    results: []
+  };
+  const results = [...checkpoint.results];
+  const pacer = new RequestPacer(config, {
+    signal,
+    onProgress,
+    onActivity,
+    onCheckpoint: () => onCheckpoint?.(checkpoint)
+  });
+  if (resumed) onActivity?.('Resuming the saved deletion checkpoint.', 'success');
   try {
-    for (let index = 0; index < candidates.length; index += 1) {
+    for (let index = checkpoint.nextIndex; index < candidates.length; index += 1) {
       throwIfAborted(signal);
       const candidate = candidates[index];
       onProgress?.({
@@ -591,23 +655,31 @@ export async function deleteApprovedChats(config, candidates, { onProgress, onAc
         label: `Checking ${candidate.title}`
       });
       try {
-        await openConversation(page, candidate.url, config.navigationPauseMs);
-        const snapshot = await getConversationSnapshot(page, config.maxBodyCharacters, candidate.title);
-        if (snapshot.id !== candidate.id) throw new Error('Conversation ID changed.');
-        const pin = await detectPinState(page, candidate.id, snapshot.title);
-        if (pin.state !== 'unpinned') {
-          const reason = `Protected because pin state is ${pin.state}`;
+        const outcome = await pacer.run(() => page, async () => {
+          await openConversation(page, candidate.url, config.navigationPauseMs);
+          const snapshot = await getConversationSnapshot(page, config.maxBodyCharacters, candidate.title);
+          if (snapshot.id !== candidate.id) throw new Error('Conversation ID changed.');
+          const pin = await detectPinState(page, candidate.id, snapshot.title);
+          if (pin.state !== 'unpinned') return { skipped: true, pinState: pin.state };
+          if (!await deleteConversation(page, candidate)) throw new Error('Could not verify that the chat closed after deletion.');
+          return { skipped: false };
+        });
+        if (outcome.skipped) {
+          const reason = `Protected because pin state is ${outcome.pinState}`;
           results.push({ id: candidate.id, title: candidate.title, status: 'skipped', reason });
           onActivity?.(`${candidate.title} — skipped`, 'warning');
-          continue;
+        } else {
+          results.push({ id: candidate.id, title: candidate.title, status: 'deleted' });
+          onActivity?.(`${candidate.title} — deleted`, 'success');
         }
-        if (!await deleteConversation(page, candidate)) throw new Error('Could not verify that the chat closed after deletion.');
-        results.push({ id: candidate.id, title: candidate.title, status: 'deleted' });
-        onActivity?.(`${candidate.title} — deleted`, 'success');
       } catch (error) {
+        if (rateLimitFailure(error)) throw error;
         results.push({ id: candidate.id, title: candidate.title, status: 'error', reason: error.message });
         onActivity?.(`${candidate.title} — ${error.message}`, 'warning');
       }
+      checkpoint.nextIndex = index + 1;
+      checkpoint.results = results;
+      await onCheckpoint?.(checkpoint);
       onProgress?.({
         stage: 'deleting',
         current: index + 1,

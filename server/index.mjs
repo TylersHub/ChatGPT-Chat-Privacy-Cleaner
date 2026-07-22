@@ -13,6 +13,23 @@ const isDev = process.argv.includes('--dev');
 const config = await loadConfig();
 const preferences = await readJson(path.join(config.dataDir, 'preferences.json'), { keywords: [] });
 const state = new AppState({ config, keywords: Array.isArray(preferences?.keywords) ? preferences.keywords : [] });
+const pendingDelete = await readJson(path.join(config.dataDir, 'delete-checkpoint.json'), null);
+const pendingScan = await readJson(path.join(config.dataDir, 'scan-checkpoint.json'), null);
+if (pendingDelete?.type === 'delete' && Array.isArray(pendingDelete.candidates)) {
+  state.patch({
+    candidates: pendingDelete.candidates,
+    approvedIds: pendingDelete.values,
+    deletionResults: pendingDelete.results ?? [],
+    resumableJob: 'delete',
+    notice: 'A saved deletion checkpoint is ready to resume after you verify the connection.'
+  });
+} else if (pendingScan?.type === 'scan' && Array.isArray(pendingScan.candidates)) {
+  state.patch({
+    candidates: pendingScan.candidates,
+    resumableJob: 'scan',
+    notice: 'A saved scan checkpoint is ready to resume after you verify the connection.'
+  });
+}
 state.value.paths.browser = await findChromeExecutable(config).catch(() => null);
 
 const app = express();
@@ -82,4 +99,3 @@ const url = `http://127.0.0.1:${running.port}`;
 console.log(`\nClearSlate is running at ${url}`);
 console.log('Keep this terminal open while using the app. Press Ctrl+C to stop.\n');
 if (process.env.CLEARSLATE_NO_OPEN !== '1') await open(url).catch(() => {});
-

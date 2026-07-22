@@ -10,8 +10,14 @@ const DEFAULTS = {
   port: 4317,
   maxKeywords: 50,
   maxBodyCharacters: 120000,
-  searchPauseMs: 900,
-  navigationPauseMs: 900,
+  searchPauseMs: 1500,
+  navigationPauseMs: 1500,
+  requestDelayMinMs: 5000,
+  requestDelayMaxMs: 10000,
+  requestBatchSize: 15,
+  batchCooldownMinMs: 300000,
+  batchCooldownMaxMs: 900000,
+  rateLimitBackoffMs: [120000, 300000, 600000, 1200000, 2400000],
   openaiModel: 'gpt-5.4-mini'
 };
 
@@ -35,4 +41,3 @@ export async function loadConfig() {
   }
   return config;
 }
-
