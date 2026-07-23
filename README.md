@@ -146,6 +146,8 @@ ClearSlate tries up to ten local ports beginning with `4317`. The active URL is 
 
 ## Important limitations
 
+- **ChatGPT rate limits may reduce or temporarily prevent scanning and deletion.** This can happen even when you are working only with conversations in your own account. ClearSlate slows requests, pauses in batches, and saves checkpoints when ChatGPT displays a request-limit warning, but it cannot guarantee that a scan or deletion run will finish without waiting and resuming later.
+- **Do not attempt to bypass ChatGPT's rate limits or protective restrictions.** Owning the account does not permit circumventing service safeguards. OpenAI's current [Terms of Use](https://openai.com/policies/terms-of-use/) and [Usage Policies](https://openai.com/policies/usage-policies/) prohibit bypassing rate limits, restrictions, or protective measures. ClearSlate does not use proxy rotation, alternate accounts, stealth techniques, or other rate-limit evasion.
 - ChatGPT's interface and search behavior can change.
 - Keyword search may not discover chats that do not contain your terms.
 - ClearSlate manages conversations only. It does not remove ChatGPT Memory entries, Library files, account exports, or copies imported by other users.
